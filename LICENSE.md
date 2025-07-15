@@ -30,7 +30,7 @@ The MIT License applies only to the PaletteCraft source code and original assets
 
 This project may include third‑party libraries or assets that are subject to their own licenses. Please refer to the respective documentation for details on those licenses. Some notable ones include:
 
-- **Tailwind Catalyst UI Kit:** This component library is licensed under the [Tailwind Plus License][2]. To use it in any copies, distributions, or derivative works of this project, you must obtain a Tailwind Plus license from Tailwind Labs.
+- **Tailwind Catalyst UI Kit:** This component library (/src/app/components/catalyst-ui-kit) is licensed under the [Tailwind Plus License][2]. To use it in any copies, distributions, or derivative works of this project, you must obtain a Tailwind Plus license from Tailwind Labs.
 
 
 [1]: https://seanmishra.com
