@@ -1,103 +1,278 @@
-import Image from "next/image";
+'use client'
 
-export default function Home() {
+import { useState, useCallback } from 'react'
+import { useDropzone } from 'react-dropzone'
+import ColorThief from 'colorthief'
+import { Button } from '@/app/components/catalyst-ui-kit/button'
+import { Heading } from '@/app/components/catalyst-ui-kit/heading'
+import { Text } from '@/app/components/catalyst-ui-kit/text'
+import { Input } from '@/app/components/catalyst-ui-kit/input'
+import { useAuth } from '@/contexts/auth-context'
+import { supabaseClient } from '@/lib/supabase'
+import { generateTailwindConfig } from '@/lib/color-utils'
+import { PhotoIcon, ArrowDownTrayIcon, BookmarkIcon } from '@heroicons/react/24/outline'
+
+interface ColorPalette {
+  colors: string[]
+  name: string
+  sourceImage?: string
+  tailwindConfig?: object
+}
+
+export default function HomePage() {
+  const { user } = useAuth()
+  const [palette, setPalette] = useState<ColorPalette | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [paletteName, setPaletteName] = useState('')
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
+
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
+    const file = acceptedFiles[0]
+    if (!file) return
+
+    setLoading(true)
+    try {
+      // Create object URL for preview
+      const imageUrl = URL.createObjectURL(file)
+      setUploadedImage(imageUrl)
+
+      // Extract colors using ColorThief
+      const img = document.createElement('img')
+      img.crossOrigin = 'anonymous'
+      img.onload = () => {
+        const colorThief = new ColorThief()
+        const dominantColor = colorThief.getColor(img)
+        const colorPalette = colorThief.getPalette(img, 8)
+        
+        // Convert RGB arrays to hex strings
+        const colors = [dominantColor, ...colorPalette].map(rgb => 
+          `#${rgb.map(c => c.toString(16).padStart(2, '0')).join('')}`
+        )
+
+        // Remove duplicates
+        const uniqueColors = Array.from(new Set(colors))
+
+        const newPalette: ColorPalette = {
+          colors: uniqueColors,
+          name: file.name.split('.')[0] || 'Untitled Palette',
+          sourceImage: imageUrl,
+          tailwindConfig: generateTailwindConfig(uniqueColors)
+        }
+
+        setPalette(newPalette)
+        setPaletteName(newPalette.name)
+        setLoading(false)
+      }
+      img.src = imageUrl
+    } catch (error) {
+      console.error('Error extracting colors:', error)
+      setLoading(false)
+    }
+  }, [])
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']
+    },
+    multiple: false
+  })
+
+  const savePalette = async () => {
+    if (!palette || !user) return
+
+    setSaving(true)
+    try {
+      let sourceImageUrl = null
+
+      // Upload image to Supabase storage if there's an uploaded image
+      if (uploadedImage && uploadedImage.startsWith('blob:')) {
+        const response = await fetch(uploadedImage)
+        const blob = await response.blob()
+        const fileExt = blob.type.split('/')[1]
+        const fileName = `${Date.now()}.${fileExt}`
+
+        const { data: uploadData, error: uploadError } = await supabaseClient.storage
+          .from('palette-images')
+          .upload(fileName, blob)
+
+        if (uploadError) throw uploadError
+
+        const { data: urlData } = supabaseClient.storage
+          .from('palette-images')
+          .getPublicUrl(uploadData.path)
+
+        sourceImageUrl = urlData.publicUrl
+      }
+
+      // Save palette to database
+      const { error } = await supabaseClient
+        .from('palettes')
+        .insert({
+          user_id: user.id,
+          name: paletteName,
+          colors: palette.colors,
+          source_image_url: sourceImageUrl,
+          tailwind_config: palette.tailwindConfig,
+          is_public: false
+        })
+
+      if (error) throw error
+
+      alert('Palette saved successfully!')
+    } catch (error) {
+      console.error('Error saving palette:', error)
+      alert('Failed to save palette')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const downloadTailwindConfig = () => {
+    if (!palette?.tailwindConfig) return
+
+    const configStr = JSON.stringify(palette.tailwindConfig, null, 2)
+    const blob = new Blob([configStr], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${paletteName.replace(/\s+/g, '-').toLowerCase()}-tailwind-config.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const copyColor = (color: string) => {
+    navigator.clipboard.writeText(color)
+  }
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="p-6 max-w-4xl mx-auto">
+      <div className="mb-8">
+        <Heading level={1} style={{ color: 'var(--color-text-primary)' }}>Color Palette Generator</Heading>
+        <Text style={{ color: 'var(--color-text-secondary)' }}>Upload an image to extract a beautiful color palette and generate Tailwind CSS configurations.</Text>
+      </div>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+      {/* Upload Area */}
+      <div
+        {...getRootProps()}
+        className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+          isDragActive
+            ? 'border-primary-500'
+            : 'hover:border-primary-400'
+        }`}
+        style={{
+          backgroundColor: isDragActive ? 'rgba(168, 85, 247, 0.1)' : 'var(--color-surface-secondary)',
+          borderColor: isDragActive ? undefined : 'var(--color-border-primary)'
+        }}
+      >
+        <input {...getInputProps()} />
+        <PhotoIcon className="mx-auto h-12 w-12" style={{ color: 'var(--color-text-tertiary)' }} />
+        <div className="mt-4">
+          {isDragActive ? (
+            <Text className="text-primary-700">Drop the image here...</Text>
+          ) : (
+            <div>
+              <Text className="text-lg font-medium" style={{ color: 'var(--color-text-primary)' }}>Drop an image here, or click to select</Text>
+              <Text style={{ color: 'var(--color-text-tertiary)' }}>PNG, JPG, GIF up to 10MB</Text>
+            </div>
+          )}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      </div>
+
+      {/* Loading State */}
+      {loading && (
+        <div className="mt-8 text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto"></div>
+          <Text className="mt-2" style={{ color: 'var(--color-text-secondary)' }}>Extracting colors...</Text>
+        </div>
+      )}
+
+      {/* Results */}
+      {palette && (
+        <div className="mt-8 space-y-6">
+          <div className="flex items-center justify-between">
+            <Heading level={2} style={{ color: 'var(--color-text-primary)' }}>Generated Palette</Heading>
+            <div className="flex gap-2">
+              <Button onClick={downloadTailwindConfig} color="zinc">
+                <ArrowDownTrayIcon className="w-4 h-4" />
+                Download Config
+              </Button>
+              <Button color="indigo" onClick={savePalette} disabled={saving}>
+                <BookmarkIcon className="w-4 h-4" />
+                {saving ? 'Saving...' : 'Save Palette'}
+              </Button>
+            </div>
+          </div>
+
+          {/* Palette Name Input */}
+          <div>
+            <label className="block text-sm font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
+              Palette Name
+            </label>
+            <Input
+              value={paletteName}
+              onChange={(e) => setPaletteName(e.target.value)}
+              placeholder="Enter palette name"
+            />
+          </div>
+
+          {/* Source Image */}
+          {uploadedImage && (
+            <div>
+              <Text className="font-medium mb-2">Source Image</Text>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={uploadedImage}
+                alt="Source"
+                className="max-w-xs max-h-48 object-contain rounded-lg border"
+              />
+            </div>
+          )}
+
+          {/* Color Swatches */}
+          <div>
+            <Text className="font-medium mb-2" style={{ color: 'var(--color-text-primary)' }}>Colors</Text>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-4">
+              {palette.colors.map((color, index) => (
+                <div
+                  key={index}
+                  className="group cursor-pointer"
+                  onClick={() => copyColor(color)}
+                >
+                  <div
+                    className="w-full h-16 rounded-lg border shadow-sm group-hover:scale-105 transition-transform"
+                    style={{ 
+                      backgroundColor: color,
+                      borderColor: 'var(--color-border-primary)' 
+                    }}
+                  />
+                  <Text className="text-xs text-center mt-1 font-mono" style={{ color: 'var(--color-text-secondary)' }}>
+                    {color}
+                  </Text>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Tailwind Config Preview */}
+          {palette.tailwindConfig && (
+            <div>
+              <Text className="font-medium mb-2" style={{ color: 'var(--color-text-primary)' }}>Tailwind Configuration</Text>
+              <pre className="border p-4 rounded-lg overflow-x-auto text-sm" style={{
+                backgroundColor: 'var(--color-surface-secondary)',
+                borderColor: 'var(--color-border-primary)',
+                color: 'var(--color-text-primary)'
+              }}>
+                {JSON.stringify(palette.tailwindConfig, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
-  );
+  )
 }
